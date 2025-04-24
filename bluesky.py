@@ -97,25 +97,27 @@ class bluesky():
 
                     embed = record.embed
 
-                    # --- FIXED: correctly handle quoted-post embeds vs external embeds ---
+                    # === BEGIN BUG FIX ===
                     try:
-                        # Determine if it's a quoted Bluesky post or an external link
-                        quoted_uri = None
+                        # Detect if embed is a quoted Bluesky post (has .record) or an external link
                         if hasattr(embed, 'record') and embed.record is not None:
+                            # .record exists only on Bluesky embed, so it's safe to use
                             quoted_uri = embed.record.uri
                         elif hasattr(embed, 'external') and embed.external is not None:
+                            # external is a link preview with no .record => skip
                             self.logger.info("Embed is external link (%s), skipping.", embed.external.uri)
                             return post_id, None
                         else:
+                            # Neither record nor external present => unexpected embed type
                             self.logger.error("Embed has no .record or .external: %r", embed)
                             return post_id, None
 
-                        # Fetch the quoted post
+                        # Fetch the quoted post which should have images
                         quoted_thread = self.client.app.bsky.feed.get_post_thread({'uri': quoted_uri})
                         post2 = quoted_thread['thread']['post']
                         embed2 = post2['record'].embed
 
-                        # Extract images from the quoted post
+                        # Pull images from the quoted embed
                         if hasattr(embed2, 'images') and embed2.images:
                             images = embed2.images
                             alt_link = images[0].fullsize
@@ -123,27 +125,28 @@ class bluesky():
                             images = embed2.media.images
                             alt_link = None
                         else:
+                            # No images found => bail
                             self.logger.error("Quoted post has no images: %r", embed2)
                             return post_id, None
 
-                        # Download the first image
-                        image_cid = images[0].image.ref.link
-                        author_did = post2['author']['did']
-                        downloaded_image_path = self.download_image(author_did, image_cid, alt_link)
-
-                        # Adjust reply roots if this was a reply
-                        if getattr(post['record'], 'reply', None):
-                            root_ref = post['record'].reply.root
-                            root_uri = root_ref.uri
-                            root_cid = root_ref.cid
-                            post_id['root_uri'] = root_uri
-                            post_id['root_cid'] = root_cid
-
-                        return post_id, downloaded_image_path
-
                     except Exception as e:
+                        # Log any errors in attempting to extract quoted images
                         self.logger.error("Error finding image in quoted post: %s", e)
                         return post_id, None
+                    # === END BUG FIX ===
+
+                    # Download the first image
+                    image_cid = images[0].image.ref.link if hasattr(images[0], 'image') else ''
+                    author_did = post2['author']['did']
+                    downloaded_image_path = self.download_image(author_did, image_cid, alt_link)
+
+                    # Adjust roots if reply
+                    if getattr(post['record'], 'reply', None):
+                        root_ref = post['record'].reply.root
+                        post_id['root_uri'] = root_ref.uri
+                        post_id['root_cid'] = root_ref.cid
+
+                    return post_id, downloaded_image_path
 
         return None
 
